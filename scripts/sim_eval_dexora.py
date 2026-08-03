@@ -46,7 +46,7 @@ import numpy as np
 import imageio
 import robosuite
 from robosuite import load_composite_controller_config
-import robosuite.utils.transform_utils as T
+from robosuite.utils.transform_utils import quat2axisangle
 
 import dexmimicgen  # noqa: F401  必须 import 才能把自定义环境注册到 robosuite 里
 
@@ -75,28 +75,34 @@ ENV_ROBOTS = {
 
 # robosuite 里实际渲染出来的相机名 -> DexoraPolicy 期望的 DEXORA_CAMERA_ORDER key
 # （cam_head / cam_left_wrist / cam_third_view / cam_right_wrist，见 dexora_policy.py）
-# 用 --inspect_obs 打印出来的 "*_image" key 核对左边这一列，右边按你训练数据用的机位对应关系改。
+# 根据 --inspect_obs 在 TwoArmCanSortRandom(GR1ArmsOnly) 上的真实输出核对过：
+#   frontview_image / robot0_eye_in_left_hand_image / robot0_eye_in_right_hand_image
+# 训练数据里本来就没有真实的 top/head 机位（见之前的记录），所以这里不填 cam_head，
+# DexoraPolicy._encode_images 会自动用 SigLIP 均值色把它填成"永久 mask"的占位机位，
+# 和你训练时的 zero-pad 处理保持一致——不要在这里塞一个假的头部相机凑数。
 CAMERA_KEY_MAP = {
-    "agentview": "cam_third_view",
-    "robot0_eye_in_left_hand": "cam_left_wrist",   # 对应 DEXORA 的左手腕视角
-    "robot0_eye_in_right_hand": "cam_right_wrist", # 对应 DEXORA 的右手腕视角
-    "frontview": "cam_head",                       # 将头部视角映射至 frontview (或根据你模型的训练数据机位映射)
+    "frontview": "cam_third_view",
+    "robot0_eye_in_left_hand": "cam_left_wrist",
+    "robot0_eye_in_right_hand": "cam_right_wrist",
 }
 
-# 按 Step1 定的 24 维 (M) 语义表，从 obs dict 里按顺序取 key 拼成 state：
-#   0:6   右臂 eef pose (xyz + axis-angle)
-#   6:12  左臂 eef pose (xyz + axis-angle)
-#   12:18 右手 6 维（对应 fourier_hands.py 的 6 维 slot-mapped action）
-#   18:24 左手 6 维
-# 下面这份是占位，key 名字未必和你实际 env 的 obs 完全一致，务必先用 --inspect_obs 核对一遍。
-STATE_KEYS = [
-    ("robot0_right_eef_pos", 3),
-    ("robot0_right_eef_axisangle", 3),
-    ("robot0_left_eef_pos", 3),
-    ("robot0_left_eef_axisangle", 3),
-    ("robot0_right_gripper_qpos", 6),
-    ("robot0_left_gripper_qpos", 6),
-]
+# 手部 6->11 的正向映射（来自 fourier_hands.py 源码的 indices 数组）：
+# 训练/action 侧是 6 维语义动作，通过这个数组展开成 11 维实际关节指令，
+# 其中好几个 11 维关节共享同一个 6 维源（耦合/mimic 关节）。
+HAND_INDICES = np.array([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5])
+
+# state 是反过来的：从 obs 里 11 维实际 qpos 近似还原成 6 维。
+# 对每个 6 维 slot，取它在 HAND_INDICES 里第一次出现的位置，用那一维原始 qpos 代表整组耦合关节
+# （因为是 mimic 关节，同一 slot 对应的几个 11 维值理论上应该接近，取第一个即可，是近似值不是精确逆映射）。
+_HAND_SLOT_TO_RAW_IDX = [int(np.where(HAND_INDICES == slot)[0][0]) for slot in range(6)]
+RIGHT_HAND_SLOT_INDICES = _HAND_SLOT_TO_RAW_IDX
+LEFT_HAND_SLOT_INDICES = _HAND_SLOT_TO_RAW_IDX
+
+
+def hand_qpos_to_6dim(raw_qpos_11, slot_indices):
+    """把 11 维原始 fourier hand qpos，按 HAND_INDICES 的反向映射取成 6 维近似 state。"""
+    raw_qpos_11 = np.asarray(raw_qpos_11).reshape(-1)
+    return raw_qpos_11[slot_indices]
 
 
 # =============================================================================
@@ -136,37 +142,39 @@ def inspect_obs(env_name, camera_names, camera_height=384, camera_width=384):
     env.close()
 
 
-# build_state
-def build_state(obs, state_keys=None):
+def build_state(obs):
     """
-    将 robosuite 的 obs 转换为 Dexora 期望的 24 维 state:
-      [0:3]   右臂 eef pos (3)
-      [3:6]   右臂 eef axisangle (3, 从 quat 转换)
-      [6:9]   左臂 eef pos (3)
-      [9:12]  左臂 eef axisangle (3, 从 quat 转换)
-      [12:18] 右手 gripper qpos (前 6 维)
-      [18:24] 左手 gripper qpos (前 6 维)
+    按 Step1 的 24 维 (M) 语义表拼 state：
+        0:6   右臂 eef pose (xyz(3) + axis-angle(3))
+        6:12  左臂 eef pose (xyz(3) + axis-angle(3))
+        12:18 右手 6 维（从 11 维原始 qpos 按 slot index 取出来）
+        18:24 左手 6 维
+    obs 里的 eef 姿态是四元数（*_eef_quat），要转成 axis-angle；
+    手部 obs 是 11 维原始关节角，要按 RIGHT_HAND_SLOT_INDICES / LEFT_HAND_SLOT_INDICES 取成 6 维。
     """
-    # 1. 提取右臂末端 pos (3D) 和 axisangle (3D)
-    r_pos = np.asarray(obs["robot0_right_eef_pos"]).reshape(-1)
-    r_axisangle = T.quat2axisangle(np.asarray(obs["robot0_right_eef_quat"]))
+    required = [
+        "robot0_right_eef_pos", "robot0_right_eef_quat",
+        "robot0_left_eef_pos", "robot0_left_eef_quat",
+        "robot0_right_gripper_qpos", "robot0_left_gripper_qpos",
+    ]
+    missing = [k for k in required if k not in obs]
+    if missing:
+        raise KeyError(
+            f"obs 里缺少 key: {missing}。先跑 `--inspect_obs` 核对这个 env 实际的 obs keys。"
+        )
 
-    # 2. 提取左臂末端 pos (3D) 和 axisangle (3D)
-    l_pos = np.asarray(obs["robot0_left_eef_pos"]).reshape(-1)
-    l_axisangle = T.quat2axisangle(np.asarray(obs["robot0_left_eef_quat"]))
+    right_pos = np.asarray(obs["robot0_right_eef_pos"]).reshape(-1)
+    right_aa = quat2axisangle(np.asarray(obs["robot0_right_eef_quat"]).reshape(-1))
+    left_pos = np.asarray(obs["robot0_left_eef_pos"]).reshape(-1)
+    left_aa = quat2axisangle(np.asarray(obs["robot0_left_eef_quat"]).reshape(-1))
 
-    # 3. 提取左右手前 6 维 qpos
-    r_gripper = np.asarray(obs["robot0_right_gripper_qpos"])[:6]
-    l_gripper = np.asarray(obs["robot0_left_gripper_qpos"])[:6]
+    right_hand6 = hand_qpos_to_6dim(obs["robot0_right_gripper_qpos"], RIGHT_HAND_SLOT_INDICES)
+    left_hand6 = hand_qpos_to_6dim(obs["robot0_left_gripper_qpos"], LEFT_HAND_SLOT_INDICES)
 
-    # 拼接成 24 维 state
-    state = np.concatenate([
-        r_pos, r_axisangle,
-        l_pos, l_axisangle,
-        r_gripper, l_gripper
-    ], axis=0)
-
-    return state
+    state = np.concatenate(
+        [right_pos, right_aa, left_pos, left_aa, right_hand6, left_hand6], axis=0
+    )
+    return state.astype(np.float32)
 
 
 def build_images(obs, camera_key_map):
@@ -218,7 +226,7 @@ def rollout_episode(
     t = 0
     for t in range(horizon):
         if action_queue.empty():
-            state = build_state(obs, STATE_KEYS)
+            state = build_state(obs)
             images = build_images(obs, camera_key_map)
             policy_obs = {
                 "state": state,
