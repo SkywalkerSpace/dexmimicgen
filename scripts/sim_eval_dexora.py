@@ -33,14 +33,17 @@ export DEXORA_T5=/home/ubuntu/myh/expirement/Dexora/google/t5-v1_1-small
 export DEXORA_SIGLIP=/home/ubuntu/myh/expirement/Dexora/google/siglip-so400m-patch14-384
 
 python sim_eval_dexora.py --env TwoArmCanSortRandom --model_path /home/ubuntu/myh/expirement/Dexora/checkpoints/dexora-400m-pretrain/checkpoint-10000/pytorch_model.bin \
-    --model_config_path /home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml --render
+    --model_config_path /home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml \
+    --camera_height 84 --camera_width 84 --instruction "Use both hands to move the blue can to its sorting bin." --render
 
     依赖：robosuite, dexmimicgen, imageio, numpy, 以及你自己的 dexora_policy.py（需要在 PYTHONPATH 里能 import 到）。
 """
 
+import cv2
 import argparse
 import os
 import time
+import json
 
 import numpy as np
 import imageio
@@ -182,8 +185,11 @@ def build_images(obs, camera_key_map):
     for robosuite_cam, dexora_cam in camera_key_map.items():
         img_key = f"{robosuite_cam}_image"
         if img_key in obs:
-            # robosuite 默认图像是上下翻转的（OpenGL 惯例），送进视觉编码器 / 存视频前翻回来
-            images[dexora_cam] = obs[img_key][::-1]
+            img = obs[img_key][::-1]
+            # 必须和训练管线保持严格一致，Resize 到 256x256！
+            if img.shape[:2] != (256, 256):
+                img = cv2.resize(img, (256, 256))
+            images[dexora_cam] = img
     return images
 
 
@@ -235,9 +241,28 @@ def rollout_episode(
                 "ctrl_freq": ctrl_freq,
             }
             action_chunk = policy.get_action(policy_obs)  # [chunk_size, M]
-            action_queue.push_chunk(action_chunk)
+
+            # 【核心修正】整个 24 维动作向量（位姿、姿态、手部）在数据集中均放大了 1000 倍
+            # 必须全部除以 1000.0 还原为标准的 米 (m) 和 弧度 (rad)
+            processed_chunk = []
+            for act in action_chunk:
+                act = np.array(act, dtype=np.float32) / 1000.0
+                processed_chunk.append(act)
+
+            action_queue.push_chunk(processed_chunk)
 
         action = action_queue.pop()
+
+        # 打印调试日志，验证 Z 轴数值是否恢复到了 1.1 米左右
+        if t % 20 == 0:
+            print("raw action chunk,", action_chunk[0][:3])
+            print("right arm", action[:6])
+            print("right hand", action[6:12])
+            print("left arm", action[12:18])
+            print("left hand", action[18:24])
+            print(f"[Step {t}] Model Output Right EEF Target:", action[0:3])
+            print(f"[Step {t}] Env Actual Base Relative EEF: ", obs.get("robot0_base_to_right_eef_pos", obs["robot0_right_eef_pos"]))
+
         obs, reward, done, info = env.step(action)
 
         if live_render:
