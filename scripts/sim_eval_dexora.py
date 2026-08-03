@@ -41,6 +41,8 @@ from robosuite import load_composite_controller_config
 
 import dexmimicgen  # noqa: F401  必须 import 才能把自定义环境注册到 robosuite 里
 
+import sys
+sys.path.append('/home/ubuntu/myh/expirement')
 from Dexora.deploy.dexora_policy import DexoraPolicy, DexoraPolicyConfig  # noqa: E402
 
 
