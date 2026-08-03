@@ -27,7 +27,10 @@ sim_eval_dexora.py
     # 有显示器的机器上想直接看仿真窗口
     python sim_eval_dexora.py --env TwoArmCoffee --model_path ... --render
 
-依赖：robosuite, dexmimicgen, imageio, numpy, 以及你自己的 dexora_policy.py（需要在 PYTHONPATH 里能 import 到）。
+    python sim_eval_dexora.py --env TwoArmCanSortRandom --model_path /home/ubuntu/myh/expirement/Dexora/checkpoints/dexora-400m-pretrain/checkpoint-10000/pytorch_model.bin
+ --model_config_path /home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml --render
+
+    依赖：robosuite, dexmimicgen, imageio, numpy, 以及你自己的 dexora_policy.py（需要在 PYTHONPATH 里能 import 到）。
 """
 
 import argparse
@@ -231,7 +234,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--env", type=str, default="TwoArmCoffee")
     parser.add_argument("--model_path", type=str, default=None, help="Dexora checkpoint 目录/文件路径")
-    parser.add_argument("--model_config_path", type=str, default="configs/base_400m.yaml")
+    parser.add_argument("--model_config_path", type=str, default="/home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml")
     parser.add_argument("--instruction", type=str, default="", help="固定语言指令，对齐训练时的某一条 phrasing")
     parser.add_argument("--n_rollouts", type=int, default=5)
     parser.add_argument("--horizon", type=int, default=400)
