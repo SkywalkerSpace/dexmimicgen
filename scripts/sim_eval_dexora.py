@@ -13,7 +13,7 @@ sim_eval_dexora.py
 用法示例：
     # 第一步：先看看这个 env 的 obs 里到底有哪些 key / shape，
     # 用来核对/修改下面 STATE_KEYS 和 CAMERA_KEY_MAP 是否符合你 Step1 定的 M 维语义表
-    python sim_eval_dexora.py --env TwoArmCoffee --inspect_obs
+    python sim_eval_dexora.py --env TwoArmCanSortRandom --inspect_obs
 
     # 跑评估，把每个 episode 存成视频
     python sim_eval_dexora.py \
@@ -27,8 +27,13 @@ sim_eval_dexora.py
     # 有显示器的机器上想直接看仿真窗口
     python sim_eval_dexora.py --env TwoArmCoffee --model_path ... --render
 
-    python sim_eval_dexora.py --env TwoArmCanSortRandom --model_path /home/ubuntu/myh/expirement/Dexora/checkpoints/dexora-400m-pretrain/checkpoint-10000/pytorch_model.bin
- --model_config_path /home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml --render
+export DEXORA_LEROBOT_ROOT=/home/ubuntu/myh/expirement/Dexora/lerobot_data/two_arm_can_sort_random
+export DEXORA_STATS=/home/ubuntu/myh/expirement/Dexora/lerobot_data/new_lerobot_stats/dataset_statistics.json
+export DEXORA_T5=/home/ubuntu/myh/expirement/Dexora/google/t5-v1_1-small
+export DEXORA_SIGLIP=/home/ubuntu/myh/expirement/Dexora/google/siglip-so400m-patch14-384
+
+python sim_eval_dexora.py --env TwoArmCanSortRandom --model_path /home/ubuntu/myh/expirement/Dexora/checkpoints/dexora-400m-pretrain/checkpoint-10000/pytorch_model.bin \
+    --model_config_path /home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml --render
 
     依赖：robosuite, dexmimicgen, imageio, numpy, 以及你自己的 dexora_policy.py（需要在 PYTHONPATH 里能 import 到）。
 """
@@ -41,6 +46,7 @@ import numpy as np
 import imageio
 import robosuite
 from robosuite import load_composite_controller_config
+import robosuite.utils.transform_utils as T
 
 import dexmimicgen  # noqa: F401  必须 import 才能把自定义环境注册到 robosuite 里
 
@@ -130,21 +136,37 @@ def inspect_obs(env_name, camera_names, camera_height=384, camera_width=384):
     env.close()
 
 
-def build_state(obs, state_keys):
-    parts = []
-    for key, dim in state_keys:
-        if key not in obs:
-            raise KeyError(
-                f"obs 里没有 key='{key}'。先跑 `--inspect_obs` 打印实际的 obs keys，"
-                f"再按 Step1 的 M 维语义表修改脚本顶部的 STATE_KEYS。"
-            )
-        v = np.asarray(obs[key]).reshape(-1)
-        if v.shape[0] != dim:
-            raise ValueError(
-                f"key='{key}' 期望 {dim} 维，实际拿到 {v.shape[0]} 维，检查 STATE_KEYS 配置是否和这个 env 匹配"
-            )
-        parts.append(v)
-    return np.concatenate(parts, axis=0)
+# build_state
+def build_state(obs, state_keys=None):
+    """
+    将 robosuite 的 obs 转换为 Dexora 期望的 24 维 state:
+      [0:3]   右臂 eef pos (3)
+      [3:6]   右臂 eef axisangle (3, 从 quat 转换)
+      [6:9]   左臂 eef pos (3)
+      [9:12]  左臂 eef axisangle (3, 从 quat 转换)
+      [12:18] 右手 gripper qpos (前 6 维)
+      [18:24] 左手 gripper qpos (前 6 维)
+    """
+    # 1. 提取右臂末端 pos (3D) 和 axisangle (3D)
+    r_pos = np.asarray(obs["robot0_right_eef_pos"]).reshape(-1)
+    r_axisangle = T.quat2axisangle(np.asarray(obs["robot0_right_eef_quat"]))
+
+    # 2. 提取左臂末端 pos (3D) 和 axisangle (3D)
+    l_pos = np.asarray(obs["robot0_left_eef_pos"]).reshape(-1)
+    l_axisangle = T.quat2axisangle(np.asarray(obs["robot0_left_eef_quat"]))
+
+    # 3. 提取左右手前 6 维 qpos
+    r_gripper = np.asarray(obs["robot0_right_gripper_qpos"])[:6]
+    l_gripper = np.asarray(obs["robot0_left_gripper_qpos"])[:6]
+
+    # 拼接成 24 维 state
+    state = np.concatenate([
+        r_pos, r_axisangle,
+        l_pos, l_axisangle,
+        r_gripper, l_gripper
+    ], axis=0)
+
+    return state
 
 
 def build_images(obs, camera_key_map):
@@ -234,7 +256,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--env", type=str, default="TwoArmCoffee")
     parser.add_argument("--model_path", type=str, default=None, help="Dexora checkpoint 目录/文件路径")
-    parser.add_argument("--model_config_path", type=str, default="/home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml")
+    parser.add_argument("--model_config_path", type=str, default="configs/base_400m.yaml")
     parser.add_argument("--instruction", type=str, default="", help="固定语言指令，对齐训练时的某一条 phrasing")
     parser.add_argument("--n_rollouts", type=int, default=5)
     parser.add_argument("--horizon", type=int, default=400)
