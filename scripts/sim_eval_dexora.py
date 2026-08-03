@@ -41,7 +41,7 @@ from robosuite import load_composite_controller_config
 
 import dexmimicgen  # noqa: F401  必须 import 才能把自定义环境注册到 robosuite 里
 
-from dexora.deploy.dexora_policy import DexoraPolicy, DexoraPolicyConfig  # noqa: E402
+from Dexora.deploy.dexora_policy import DexoraPolicy, DexoraPolicyConfig  # noqa: E402
 
 
 # =============================================================================
@@ -67,9 +67,9 @@ ENV_ROBOTS = {
 # 用 --inspect_obs 打印出来的 "*_image" key 核对左边这一列，右边按你训练数据用的机位对应关系改。
 CAMERA_KEY_MAP = {
     "agentview": "cam_third_view",
-    "robot0_eye_in_hand": "cam_head",
-    "robot0_right_eye_in_hand": "cam_right_wrist",
-    "robot0_left_eye_in_hand": "cam_left_wrist",
+    "robot0_eye_in_left_hand": "cam_left_wrist",   # 对应 DEXORA 的左手腕视角
+    "robot0_eye_in_right_hand": "cam_right_wrist", # 对应 DEXORA 的右手腕视角
+    "frontview": "cam_head",                       # 将头部视角映射至 frontview (或根据你模型的训练数据机位映射)
 }
 
 # 按 Step1 定的 24 维 (M) 语义表，从 obs dict 里按顺序取 key 拼成 state：
