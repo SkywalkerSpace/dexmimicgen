@@ -20,6 +20,8 @@ sim_eval_dexora.py
         --env TwoArmCoffee \
         --model_path /path/to/dexora_ckpt_dir \
         --model_config_path configs/base_400m.yaml \
+        --stats_file /path/to/lerobot_stats/dataset_statistics.json \
+        --normalize_mode min_max \
         --instruction "pick up the coffee pod and place it in the machine" \
         --n_rollouts 5 --horizon 400 \
         --video_dir ./eval_videos
@@ -34,6 +36,7 @@ export DEXORA_SIGLIP=/home/ubuntu/myh/expirement/Dexora/google/siglip-so400m-pat
 
 python sim_eval_dexora.py --env TwoArmCanSortRandom --model_path /home/ubuntu/myh/expirement/Dexora/checkpoints/dexora-400m-pretrain/checkpoint-10000/pytorch_model.bin \
     --model_config_path /home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml \
+    --stats_file /home/ubuntu/myh/expirement/Dexora/lerobot_data/new_lerobot_stats/dataset_statistics.json \
     --camera_height 84 --camera_width 84 --instruction "Use both hands to move the blue can to its sorting bin." --render
 
     依赖：robosuite, dexmimicgen, imageio, numpy, 以及你自己的 dexora_policy.py（需要在 PYTHONPATH 里能 import 到）。
@@ -41,9 +44,9 @@ python sim_eval_dexora.py --env TwoArmCanSortRandom --model_path /home/ubuntu/my
 
 import cv2
 import argparse
+import json
 import os
 import time
-import json
 
 import numpy as np
 import imageio
@@ -106,6 +109,82 @@ def hand_qpos_to_6dim(raw_qpos_11, slot_indices):
     """把 11 维原始 fourier hand qpos，按 HAND_INDICES 的反向映射取成 6 维近似 state。"""
     raw_qpos_11 = np.asarray(raw_qpos_11).reshape(-1)
     return raw_qpos_11[slot_indices]
+
+
+# =============================================================================
+# 归一化 / 反归一化 —— 必须和 lerobot_vla_dataset.py 的 _normalize_data 完全一致，
+# 否则模型看到的 state 分布、model 输出的 action 分布都和训练时对不上。
+#
+# 训练时 state/action 都是先转换成 24 维物理量（米/弧度），再用 dataset_statistics.json
+# 里的统计量归一化后才喂进网络的；网络学到的也是"归一化空间"里的映射。
+# 之前脚本漏了这一步，直接把网络的原始输出当成真实 EEF 坐标喂给 env.step()，
+# 这正是你现在看到"model output"比"env实际EEF"大几百到上千倍的原因——
+# 网络输出其实还停留在归一化空间，没有反归一化回物理单位。
+# =============================================================================
+
+def load_stats(stats_file):
+    with open(stats_file, "r") as f:
+        return json.load(f)
+
+
+def normalize(data, stats_entry, mode):
+    """物理量 -> 归一化空间，喂给模型前对 state 用。"""
+    data = np.asarray(data, dtype=np.float64)
+    if mode == "mean_std":
+        mean = np.array(stats_entry["mean"])
+        std = np.array(stats_entry["std"])
+        std = np.where(std == 0, 1, std)
+        out = (data - mean) / std
+    elif mode == "min_max":
+        min_val = np.array(stats_entry["percentile_1"])
+        max_val = np.array(stats_entry["percentile_99"])
+        rng = max_val - min_val
+        rng = np.where(rng == 0, 1, rng)
+        out = (data - min_val) / rng
+    else:
+        raise ValueError(f"未知 normalize_mode: {mode}")
+    return out.astype(np.float32)
+
+
+def denormalize(data, stats_entry, mode):
+    """归一化空间 -> 物理量，模型输出的 action 要过这一步才能喂给 env.step()。"""
+    data = np.asarray(data, dtype=np.float64)
+    if mode == "mean_std":
+        mean = np.array(stats_entry["mean"])
+        std = np.array(stats_entry["std"])
+        out = data * std + mean
+    elif mode == "min_max":
+        min_val = np.array(stats_entry["percentile_1"])
+        max_val = np.array(stats_entry["percentile_99"])
+        rng = max_val - min_val
+        out = data * rng + min_val
+    else:
+        raise ValueError(f"未知 normalize_mode: {mode}")
+    return out.astype(np.float32)
+
+
+# =============================================================================
+# canonical(模型/数据集列序) -> env 原生 action_spec 顺序的重排。
+#
+# dexmimicgen_to_lerobot.py 里 STATE_ACTION_NAMES / build_action_vector 输出的是：
+#   0:6 右臂 | 6:12 左臂 | 12:18 右手 | 18:24 左手      （canonical，模型学的就是这个顺序）
+# 而它的 ACTION_LAYOUT（从 hdf5 原始 action 切片、也就是 env.step() 真正吃的顺序）是：
+#   0:6 右臂 | 6:12 右手 | 12:18 左臂 | 18:24 左手      （env 原生顺序）
+# 两者不一样！之前的脚本直接把模型输出（canonical 顺序）喂给 env.step()，
+# 相当于把"左臂目标"当成"右手目标"喂进去、把"右手目标"当成"左臂目标"喂进去——
+# 这也是机械臂/手乱动的另一个直接原因，和上面缺反归一化是两个独立的 bug，要一起改。
+#
+# ⚠️ 如果你的 ACTION_LAYOUT 和 dexmimicgen_to_lerobot.py 里的不一样（比如后来跑
+# --inspect 改过），这个函数要跟着改。
+# =============================================================================
+
+def canonical_action_to_env(action_24):
+    action_24 = np.asarray(action_24).reshape(-1)
+    right_arm = action_24[0:6]
+    left_arm = action_24[6:12]
+    right_hand = action_24[12:18]
+    left_hand = action_24[18:24]
+    return np.concatenate([right_arm, right_hand, left_arm, left_hand]).astype(np.float32)
 
 
 # =============================================================================
@@ -185,11 +264,8 @@ def build_images(obs, camera_key_map):
     for robosuite_cam, dexora_cam in camera_key_map.items():
         img_key = f"{robosuite_cam}_image"
         if img_key in obs:
-            img = obs[img_key][::-1]
-            # 必须和训练管线保持严格一致，Resize 到 256x256！
-            if img.shape[:2] != (256, 256):
-                img = cv2.resize(img, (256, 256))
-            images[dexora_cam] = img
+            # robosuite 默认图像是上下翻转的（OpenGL 惯例），送进视觉编码器 / 存视频前翻回来
+            images[dexora_cam] = obs[img_key][::-1]
     return images
 
 
@@ -218,6 +294,8 @@ def rollout_episode(
     instruction,
     horizon,
     camera_key_map,
+    stats,
+    normalize_mode,
     ctrl_freq=20.0,
     viz_camera="agentview",
     video_writer=None,
@@ -232,24 +310,19 @@ def rollout_episode(
     t = 0
     for t in range(horizon):
         if action_queue.empty():
-            state = build_state(obs)
+            state_raw = build_state(obs)
+            state_norm = normalize(state_raw, stats["state"], normalize_mode)
             images = build_images(obs, camera_key_map)
             policy_obs = {
-                "state": state,
+                "state": state_norm,
                 "images": images,
                 "instruction": instruction,
                 "ctrl_freq": ctrl_freq,
             }
-            action_chunk = policy.get_action(policy_obs)  # [chunk_size, M]
-
-            # 【核心修正】整个 24 维动作向量（位姿、姿态、手部）在数据集中均放大了 1000 倍
-            # 必须全部除以 1000.0 还原为标准的 米 (m) 和 弧度 (rad)
-            processed_chunk = []
-            for act in action_chunk:
-                act = np.array(act, dtype=np.float32) / 1000.0
-                processed_chunk.append(act)
-
-            action_queue.push_chunk(processed_chunk)
+            action_chunk = policy.get_action(policy_obs)  # [chunk_size, M]，模型输出仍是归一化+canonical顺序
+            action_chunk = denormalize(action_chunk, stats["action"], normalize_mode)
+            action_chunk = np.stack([canonical_action_to_env(a) for a in action_chunk], axis=0)
+            action_queue.push_chunk(action_chunk)
 
         action = action_queue.pop()
 
@@ -302,6 +375,14 @@ def main():
     parser.add_argument("--render", action="store_true", help="本地窗口实时渲染，和存视频二选一")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
+        "--stats_file", type=str, default=None,
+        help="dataset_statistics.json 路径（lerobot_vla_dataset.py --stat 生成的），必须提供才能正确归一化/反归一化",
+    )
+    parser.add_argument(
+        "--normalize_mode", type=str, default="min_max", choices=["min_max", "mean_std"],
+        help="要和训练时 LeRobotVLADataset(normalize_mode=...) 用的模式一致",
+    )
+    parser.add_argument(
         "--inspect_obs",
         action="store_true",
         help="只打印一次 obs keys/shape 就退出，不加载 policy，用来配置 STATE_KEYS/CAMERA_KEY_MAP",
@@ -316,6 +397,13 @@ def main():
 
     if args.model_path is None:
         raise ValueError("--model_path 必须提供（除非只是 --inspect_obs）")
+    if args.stats_file is None:
+        raise ValueError(
+            "--stats_file 必须提供（dataset_statistics.json），否则 state/action 没法正确归一化/反归一化，"
+            "模型输出会停留在训练时的归一化空间，直接喂给 env 会得到离谱的大数值。"
+        )
+
+    stats = load_stats(args.stats_file)
 
     np.random.seed(args.seed)
 
@@ -348,6 +436,8 @@ def main():
             args.instruction,
             args.horizon,
             CAMERA_KEY_MAP,
+            stats,
+            args.normalize_mode,
             viz_camera=args.viz_camera,
             video_writer=writer,
             live_render=args.render,
