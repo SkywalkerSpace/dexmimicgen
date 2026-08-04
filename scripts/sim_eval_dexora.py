@@ -259,13 +259,20 @@ def build_state(obs):
     return state.astype(np.float32)
 
 
+# 直接对齐 siglip-so400m-patch14-384 的输入尺寸（384x384），避免训练时先resize到256
+# 再被 SigLIP processor 二次resize到384，两次插值会比一次插值更糊。
+IMAGE_SIZE = (384, 384)  # (H, W)
+
 def build_images(obs, camera_key_map):
     images = {}
     for robosuite_cam, dexora_cam in camera_key_map.items():
         img_key = f"{robosuite_cam}_image"
         if img_key in obs:
             # robosuite 默认图像是上下翻转的（OpenGL 惯例），送进视觉编码器 / 存视频前翻回来
-            images[dexora_cam] = obs[img_key][::-1]
+            img = obs[img_key][::-1]
+            if img.shape[:2] != IMAGE_SIZE:
+                img = cv2.resize(img, (IMAGE_SIZE[1], IMAGE_SIZE[0]), interpolation=cv2.INTER_CUBIC)
+            images[dexora_cam] = img
     return images
 
 
