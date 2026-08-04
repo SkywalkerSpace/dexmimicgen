@@ -105,10 +105,22 @@ RIGHT_HAND_SLOT_INDICES = _HAND_SLOT_TO_RAW_IDX
 LEFT_HAND_SLOT_INDICES = _HAND_SLOT_TO_RAW_IDX
 
 
-def hand_qpos_to_6dim(raw_qpos_11, slot_indices):
-    """把 11 维原始 fourier hand qpos，按 HAND_INDICES 的反向映射取成 6 维近似 state。"""
+# 与 fourier_hands.py 的 indices = [0,0,1,1,2,2,3,3,4,4,5] 对应的分组
+HAND_MIMIC_GROUPS = [
+    [0, 1],   # slot 0
+    [2, 3],   # slot 1
+    [4, 5],   # slot 2
+    [6, 7],   # slot 3
+    [8, 9],   # slot 4
+    [10],     # slot 5（无耦合关节，单独一个）
+]
+
+def hand_qpos_to_6dim(raw_qpos_11, mimic_groups=HAND_MIMIC_GROUPS):
+    """把 11 维原始 fourier hand qpos，按 mimic 分组取均值，得到 6 维近似 state。
+    与 dexmimicgen_to_lerobot.py 中 out[a_idx] = qpos11[positions].mean() 保持一致。
+    """
     raw_qpos_11 = np.asarray(raw_qpos_11).reshape(-1)
-    return raw_qpos_11[slot_indices]
+    return np.array([raw_qpos_11[g].mean() for g in mimic_groups])
 
 
 # =============================================================================
