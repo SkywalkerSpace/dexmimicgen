@@ -348,10 +348,9 @@ def rollout_episode(
 
         # 打印调试日志，验证 Z 轴数值是否恢复到了 1.1 米左右
         if t % 20 == 0:
-            print("raw action chunk,", action_chunk[0][:3])
-            print("right arm", action[:6])
-            print("right hand", action[6:12])
-            print("left arm", action[12:18])
+            print("right arm", action[0:6])
+            print("left arm ", action[6:12])
+            print("right hand", action[12:18])
             print("left hand", action[18:24])
             print(f"[Step {t}] Model Output Right EEF Target:", action[0:3])
             print(f"[Step {t}] Env Actual Base Relative EEF: ", obs.get("robot0_base_to_right_eef_pos", obs["robot0_right_eef_pos"]))
