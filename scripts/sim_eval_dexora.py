@@ -34,10 +34,9 @@ export DEXORA_STATS=/home/ubuntu/myh/expirement/Dexora/lerobot_data/new_lerobot_
 export DEXORA_T5=/home/ubuntu/myh/expirement/Dexora/google/t5-v1_1-small
 export DEXORA_SIGLIP=/home/ubuntu/myh/expirement/Dexora/google/siglip-so400m-patch14-384
 
-python sim_eval_dexora.py --env TwoArmCanSortRandom --model_path /home/ubuntu/myh/expirement/Dexora/checkpoints/dexora-400m-pretrain/checkpoint-10000/pytorch_model.bin \
-    --model_config_path /home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml \
-    --stats_file /home/ubuntu/myh/expirement/Dexora/lerobot_data/new_lerobot_stats/dataset_statistics.json \
-    --camera_height 84 --camera_width 84 --instruction "Use both hands to move the blue can to its sorting bin." --render
+python sim_eval_dexora.py --env TwoArmCanSortRandom --model_path /home/ubuntu/myh/expirement/Dexora/checkpoints/dexora-400m-pretrain/     --model_config_path /home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml     --stats_file /home/ubuntu/myh/expirement/Dexora/lerobot_data/new_lerobot_stats/dataset_statistics.json     --camera_height 84 --camera_width 84 --instruction "Use both hands to move the blue can to its sorting bin." --render
+
+python sim_eval_dexora.py --env TwoArmCanSortRandom --model_path /home/ubuntu/myh/expirement/Dexora/checkpoints/dexora-400m-posttrain/     --model_config_path /home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml     --stats_file /home/ubuntu/myh/expirement/Dexora/lerobot_data/new_lerobot_stats/dataset_statistics.json     --camera_height 84 --camera_width 84 --instruction "Use both hands to move the blue can to its sorting bin." --render
 
     依赖：robosuite, dexmimicgen, imageio, numpy, 以及你自己的 dexora_policy.py（需要在 PYTHONPATH 里能 import 到）。
 """
@@ -342,7 +341,7 @@ def rollout_episode(
             action_chunk = policy.get_action(policy_obs)  # [chunk_size, M]，模型输出仍是归一化+canonical顺序
             print("raw normalized output:", action_chunk[0])
             action_chunk = denormalize(action_chunk, stats["action"], normalize_mode)
-            action_chunk = np.stack([canonical_action_to_env(a) for a in action_chunk], axis=0)
+            # action_chunk = np.stack([canonical_action_to_env(a) for a in action_chunk], axis=0)
             action_queue.push_chunk(action_chunk)
 
         action = action_queue.pop()
