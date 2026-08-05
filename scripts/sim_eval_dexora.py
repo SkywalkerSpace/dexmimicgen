@@ -48,6 +48,7 @@ import json
 import os
 import time
 
+import torch
 import numpy as np
 import imageio
 import robosuite
@@ -339,6 +340,7 @@ def rollout_episode(
                 "ctrl_freq": ctrl_freq,
             }
             action_chunk = policy.get_action(policy_obs)  # [chunk_size, M]，模型输出仍是归一化+canonical顺序
+            print("raw normalized output:", action_chunk[0])
             action_chunk = denormalize(action_chunk, stats["action"], normalize_mode)
             action_chunk = np.stack([canonical_action_to_env(a) for a in action_chunk], axis=0)
             action_queue.push_chunk(action_chunk)
@@ -430,6 +432,7 @@ def main():
         model_config_path=args.model_config_path,
         state_dim=args.state_dim,
         chunk_size=args.chunk_size,
+        dtype=torch.float32,
     )
     policy = DexoraPolicy(model_path=args.model_path, cfg=cfg)
 
