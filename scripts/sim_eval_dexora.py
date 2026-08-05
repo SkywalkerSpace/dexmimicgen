@@ -34,9 +34,9 @@ export DEXORA_STATS=/home/ubuntu/myh/expirement/Dexora/lerobot_data/new_lerobot_
 export DEXORA_T5=/home/ubuntu/myh/expirement/Dexora/google/t5-v1_1-small
 export DEXORA_SIGLIP=/home/ubuntu/myh/expirement/Dexora/google/siglip-so400m-patch14-384
 
-python sim_eval_dexora.py --env TwoArmCanSortRandom --model_path /home/ubuntu/myh/expirement/Dexora/checkpoints/dexora-400m-pretrain/     --model_config_path /home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml     --stats_file /home/ubuntu/myh/expirement/Dexora/lerobot_data/new_lerobot_stats/dataset_statistics.json     --camera_height 84 --camera_width 84 --instruction "Use both hands to move the blue can to its sorting bin." --render
+python sim_eval_dexora.py --env TwoArmCanSortRandom --dataset_hdf5 /home/ubuntu/myh/expirement/dexmimicgen/datasets/two_arm_can_sort_random.hdf5 --model_path /home/ubuntu/myh/expirement/Dexora/checkpoints/dexora-400m-pretrain/     --model_config_path /home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml     --stats_file /home/ubuntu/myh/expirement/Dexora/lerobot_data/new_lerobot_stats/dataset_statistics.json     --camera_height 84 --camera_width 84 --instruction "Use both hands to move the blue can to its sorting bin." --render
 
-python sim_eval_dexora.py --env TwoArmCanSortRandom --model_path /home/ubuntu/myh/expirement/Dexora/checkpoints/dexora-400m-posttrain/     --model_config_path /home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml     --stats_file /home/ubuntu/myh/expirement/Dexora/lerobot_data/new_lerobot_stats/dataset_statistics.json     --camera_height 84 --camera_width 84 --instruction "Use both hands to move the blue can to its sorting bin." --render
+python sim_eval_dexora.py --env TwoArmCanSortRandom --dataset_hdf5 /home/ubuntu/myh/expirement/dexmimicgen/datasets/two_arm_can_sort_random.hdf5 --model_path /home/ubuntu/myh/expirement/Dexora/checkpoints/dexora-400m-posttrain/     --model_config_path /home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml     --stats_file /home/ubuntu/myh/expirement/Dexora/lerobot_data/new_lerobot_stats/dataset_statistics.json     --camera_height 84 --camera_width 84 --instruction "Use both hands to move the blue can to its sorting bin." --render
 
     依赖：robosuite, dexmimicgen, imageio, numpy, 以及你自己的 dexora_policy.py（需要在 PYTHONPATH 里能 import 到）。
 """
@@ -50,6 +50,7 @@ import time
 import torch
 import numpy as np
 import imageio
+import h5py
 import robosuite
 from robosuite import load_composite_controller_config
 from robosuite.utils.transform_utils import quat2axisangle
@@ -76,6 +77,8 @@ ENV_ROBOTS = {
     "TwoArmDrawerCleanup": ["PandaDexRH", "PandaDexLH"],
     "TwoArmCoffee": ["GR1FixedLowerBody"],
     "TwoArmPouring": ["GR1FixedLowerBody"],
+    # 与 two_arm_can_sort_random.hdf5 的 env_args.env_name 一致。
+    "TwoArmCanSortBlue": ["GR1ArmsOnly"],
     "TwoArmCanSortRandom": ["GR1ArmsOnly"],
 }
 
@@ -176,41 +179,73 @@ def denormalize(data, stats_entry, mode):
 
 
 # =============================================================================
-# canonical(模型/数据集列序) -> env 原生 action_spec 顺序的重排。
+# canonical（模型 / LeRobot 数据集列序）与 TwoArmCanSortRandom 当前环境的
+# action_spec 顺序一致：
+#   0:6 右臂 | 6:12 左臂 | 12:18 右手 | 18:24 左手
 #
-# dexmimicgen_to_lerobot.py 里 STATE_ACTION_NAMES / build_action_vector 输出的是：
-#   0:6 右臂 | 6:12 左臂 | 12:18 右手 | 18:24 左手      （canonical，模型学的就是这个顺序）
-# 而它的 ACTION_LAYOUT（从 hdf5 原始 action 切片、也就是 env.step() 真正吃的顺序）是：
-#   0:6 右臂 | 6:12 右手 | 12:18 左臂 | 18:24 左手      （env 原生顺序）
-# 两者不一样！之前的脚本直接把模型输出（canonical 顺序）喂给 env.step()，
-# 相当于把"左臂目标"当成"右手目标"喂进去、把"右手目标"当成"左臂目标"喂进去——
-# 这也是机械臂/手乱动的另一个直接原因，和上面缺反归一化是两个独立的 bug，要一起改。
-#
-# ⚠️ 如果你的 ACTION_LAYOUT 和 dexmimicgen_to_lerobot.py 里的不一样（比如后来跑
-# --inspect 改过），这个函数要跟着改。
+# dexmimicgen_to_lerobot.py 中 ACTION_LAYOUT 已由实际统计量校验为上述顺序。
+# 因此这里必须是恒等映射。此前将其错误重排为
+# [右臂 | 右手 | 左臂 | 左手]，会把右手命令送进左臂，导致左臂失控且无法抓取。
+# 若更换环境或重新确认 ACTION_LAYOUT 后发现其顺序不同，应同时修改数据转换和本函数，
+# 绝不能只改其中一侧。
 # =============================================================================
 
 def canonical_action_to_env(action_24):
     action_24 = np.asarray(action_24).reshape(-1)
-    right_arm = action_24[0:6]
-    left_arm = action_24[6:12]
-    right_hand = action_24[12:18]
-    left_hand = action_24[18:24]
-    return np.concatenate([right_arm, right_hand, left_arm, left_hand]).astype(np.float32)
+    if action_24.shape[0] != 24:
+        raise ValueError(f"期望 24 维 action，实际得到 {action_24.shape[0]} 维")
+    return action_24.astype(np.float32, copy=False)
 
 
 # =============================================================================
 # env / obs 相关工具函数
 # =============================================================================
 
-def make_env(env_name, camera_names, camera_height=384, camera_width=384, has_renderer=False):
+def load_recorded_env_config(dataset_hdf5):
+    """读取 demo 采集时写入 HDF5 的环境名和完整 composite controller 配置。
+
+    特别重要：TwoArmCanSortBlue 的 demo 使用 WHOLE_BODY_MINK_IK，且 IK 输入为
+    world-frame absolute pose。评测时必须复用这一配置；默认控制器会把绝对 EEF
+    坐标当 delta，从而造成机械臂持续上抬。
+    """
+    with h5py.File(dataset_hdf5, "r") as f:
+        if "data" not in f or "env_args" not in f["data"].attrs:
+            raise KeyError(f"{dataset_hdf5} 缺少 data.attrs['env_args']")
+        env_args_raw = f["data"].attrs["env_args"]
+
+    if isinstance(env_args_raw, bytes):
+        env_args_raw = env_args_raw.decode("utf-8")
+    env_args = json.loads(env_args_raw)
+    env_name = env_args.get("env_name")
+    controller_configs = env_args.get("env_kwargs", {}).get("controller_configs")
+    if not env_name or controller_configs is None:
+        raise KeyError(
+            "env_args 中缺少 env_name 或 env_kwargs.controller_configs，无法复用录制控制器"
+        )
+    return env_name, controller_configs
+
+
+def make_env(
+    env_name,
+    camera_names,
+    camera_height=384,
+    camera_width=384,
+    has_renderer=False,
+    controller_configs=None,
+):
     if env_name not in ENV_ROBOTS:
         raise ValueError(f"未知 env: {env_name}，请检查 ENV_ROBOTS 里有没有这个 key")
     robots = ENV_ROBOTS[env_name]
     env_kwargs = dict(
         env_name=env_name,
         robots=robots,
-        controller_configs=load_composite_controller_config(robot=robots[0]),
+        # 未传数据集配置时才回退到 robosuite 默认控制器。对 DexMimicGen demo，
+        # 应通过 --dataset_hdf5 传入录制时的 WHOLE_BODY_MINK_IK 配置。
+        controller_configs=(
+            controller_configs
+            if controller_configs is not None
+            else load_composite_controller_config(robot=robots[0])
+        ),
         has_renderer=has_renderer,
         has_offscreen_renderer=True,
         ignore_done=True,
@@ -223,9 +258,18 @@ def make_env(env_name, camera_names, camera_height=384, camera_width=384, has_re
     return robosuite.make(**env_kwargs)
 
 
-def inspect_obs(env_name, camera_names, camera_height=384, camera_width=384):
+def inspect_obs(
+    env_name, camera_names, camera_height=384, camera_width=384, controller_configs=None
+):
     """只 reset 一次，把 obs 里所有 key/shape 打印出来，不涉及 policy。"""
-    env = make_env(env_name, camera_names, camera_height, camera_width, has_renderer=False)
+    env = make_env(
+        env_name,
+        camera_names,
+        camera_height,
+        camera_width,
+        has_renderer=False,
+        controller_configs=controller_configs,
+    )
     obs = env.reset()
     print(f"=== obs keys for env={env_name} (robots={ENV_ROBOTS[env_name]}) ===")
     for k in sorted(obs.keys()):
@@ -402,6 +446,15 @@ def rollout_episode(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--env", type=str, default="TwoArmCoffee")
+    parser.add_argument(
+        "--dataset_hdf5",
+        type=str,
+        default=None,
+        help=(
+            "原始 DexMimicGen demo .hdf5。提供后读取其 env_args 中的 env_name 和 "
+            "controller_configs，确保评测复用采集时的控制器（推荐且对本数据集必需）。"
+        ),
+    )
     parser.add_argument("--model_path", type=str, default=None, help="Dexora checkpoint 目录/文件路径")
     parser.add_argument("--model_config_path", type=str, default="configs/base_400m.yaml")
     parser.add_argument("--instruction", type=str, default="", help="固定语言指令，对齐训练时的某一条 phrasing")
@@ -436,10 +489,28 @@ def main():
     )
     args = parser.parse_args()
 
+    recorded_controller_configs = None
+    if args.dataset_hdf5 is not None:
+        recorded_env_name, recorded_controller_configs = load_recorded_env_config(
+            args.dataset_hdf5
+        )
+        if args.env != recorded_env_name:
+            print(
+                f"使用 HDF5 录制环境: {recorded_env_name} "
+                f"（忽略 --env {args.env}），并复用其 controller_configs"
+            )
+            args.env = recorded_env_name
+
     camera_names = sorted(set(CAMERA_KEY_MAP.keys()) | {args.viz_camera})
 
     if args.inspect_obs:
-        inspect_obs(args.env, camera_names, args.camera_height, args.camera_width)
+        inspect_obs(
+            args.env,
+            camera_names,
+            args.camera_height,
+            args.camera_width,
+            controller_configs=recorded_controller_configs,
+        )
         return
 
     if args.model_path is None:
@@ -463,7 +534,12 @@ def main():
     policy = DexoraPolicy(model_path=args.model_path, cfg=cfg)
 
     env = make_env(
-        args.env, camera_names, args.camera_height, args.camera_width, has_renderer=args.render
+        args.env,
+        camera_names,
+        args.camera_height,
+        args.camera_width,
+        has_renderer=args.render,
+        controller_configs=recorded_controller_configs,
     )
 
     if not args.render:
