@@ -345,7 +345,10 @@ def rollout_episode(
             action_queue.push_chunk(action_chunk)
 
         action = action_queue.pop()
-        right_eef_before = np.asarray(obs["robot0_right_eef_pos"]).reshape(-1)
+        right_eef_before_world = np.asarray(obs["robot0_right_eef_pos"]).reshape(-1)
+        right_eef_before_base = np.asarray(
+            obs.get("robot0_base_to_right_eef_pos", obs["robot0_right_eef_pos"])
+        ).reshape(-1)
 
         # 打印调试日志，验证 Z 轴数值是否恢复到了 1.1 米左右
         if t % 20 == 0:
@@ -354,14 +357,20 @@ def rollout_episode(
             print("right hand", action[12:18])
             print("left hand", action[18:24])
             print(f"[Step {t}] Model Output Right EEF Target:", action[0:3])
-            print(f"[Step {t}] Env Actual Right EEF Before Step:", right_eef_before)
+            print(f"[Step {t}] Env Actual Right EEF Before Step (world):", right_eef_before_world)
+            print(f"[Step {t}] Env Actual Right EEF Before Step (base-relative):", right_eef_before_base)
 
         obs, reward, done, info = env.step(action)
 
         if t % 20 == 0:
-            right_eef_after = np.asarray(obs["robot0_right_eef_pos"]).reshape(-1)
-            print(f"[Step {t}] Env Actual Right EEF After Step:", right_eef_after)
-            print(f"[Step {t}] Right EEF Delta After Step:", right_eef_after - action[0:3])
+            right_eef_after_world = np.asarray(obs["robot0_right_eef_pos"]).reshape(-1)
+            right_eef_after_base = np.asarray(
+                obs.get("robot0_base_to_right_eef_pos", obs["robot0_right_eef_pos"])
+            ).reshape(-1)
+            print(f"[Step {t}] Env Actual Right EEF After Step (world):", right_eef_after_world)
+            print(f"[Step {t}] Env Actual Right EEF After Step (base-relative):", right_eef_after_base)
+            print(f"[Step {t}] Right EEF Delta After Step (world-target):", right_eef_after_world - action[0:3])
+            print(f"[Step {t}] Right EEF Delta After Step (base-target):", right_eef_after_base - action[0:3])
 
         if live_render:
             env.render()
