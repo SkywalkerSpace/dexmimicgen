@@ -341,10 +341,11 @@ def rollout_episode(
             action_chunk = policy.get_action(policy_obs)  # [chunk_size, M]，模型输出仍是归一化+canonical顺序
             print("raw normalized output:", action_chunk[0])
             action_chunk = denormalize(action_chunk, stats["action"], normalize_mode)
-            # action_chunk = np.stack([canonical_action_to_env(a) for a in action_chunk], axis=0)
+            action_chunk = np.stack([canonical_action_to_env(a) for a in action_chunk], axis=0)
             action_queue.push_chunk(action_chunk)
 
         action = action_queue.pop()
+        right_eef_before = np.asarray(obs["robot0_right_eef_pos"]).reshape(-1)
 
         # 打印调试日志，验证 Z 轴数值是否恢复到了 1.1 米左右
         if t % 20 == 0:
@@ -353,9 +354,14 @@ def rollout_episode(
             print("right hand", action[12:18])
             print("left hand", action[18:24])
             print(f"[Step {t}] Model Output Right EEF Target:", action[0:3])
-            print(f"[Step {t}] Env Actual Base Relative EEF: ", obs.get("robot0_base_to_right_eef_pos", obs["robot0_right_eef_pos"]))
+            print(f"[Step {t}] Env Actual Right EEF Before Step:", right_eef_before)
 
         obs, reward, done, info = env.step(action)
+
+        if t % 20 == 0:
+            right_eef_after = np.asarray(obs["robot0_right_eef_pos"]).reshape(-1)
+            print(f"[Step {t}] Env Actual Right EEF After Step:", right_eef_after)
+            print(f"[Step {t}] Right EEF Delta After Step:", right_eef_after - action[0:3])
 
         if live_render:
             env.render()
