@@ -306,6 +306,9 @@ class ChunkActionQueue:
     def pop(self):
         return self._queue.pop(0)
 
+    def clear(self):
+        self._queue = []
+
 
 def rollout_episode(
     env,
@@ -315,6 +318,7 @@ def rollout_episode(
     camera_key_map,
     stats,
     normalize_mode,
+    replan_interval,
     ctrl_freq=20.0,
     viz_camera="agentview",
     video_writer=None,
@@ -328,7 +332,7 @@ def rollout_episode(
     success = False
     t = 0
     for t in range(horizon):
-        if action_queue.empty():
+        if action_queue.empty() or t % replan_interval == 0:
             state_raw = build_state(obs)
             state_norm = normalize(state_raw, stats["state"], normalize_mode)
             images = build_images(obs, camera_key_map)
@@ -371,6 +375,9 @@ def rollout_episode(
             print(f"[Step {t}] Env Actual Right EEF After Step (base-relative):", right_eef_after_base)
             print(f"[Step {t}] Right EEF Delta After Step (world-target):", right_eef_after_world - action[0:3])
             print(f"[Step {t}] Right EEF Delta After Step (base-target):", right_eef_after_base - action[0:3])
+
+        if (t + 1) % replan_interval == 0:
+            action_queue.clear()
 
         if live_render:
             env.render()
@@ -415,6 +422,12 @@ def main():
     parser.add_argument(
         "--normalize_mode", type=str, default="min_max", choices=["min_max", "mean_std"],
         help="要和训练时 LeRobotVLADataset(normalize_mode=...) 用的模式一致",
+    )
+    parser.add_argument(
+        "--replan_interval",
+        type=int,
+        default=6,
+        help="执行多少步后重新请求一次策略输出；设为 6 可避免一次性开环执行完整 chunk",
     )
     parser.add_argument(
         "--inspect_obs",
@@ -473,6 +486,7 @@ def main():
             CAMERA_KEY_MAP,
             stats,
             args.normalize_mode,
+            args.replan_interval,
             viz_camera=args.viz_camera,
             video_writer=writer,
             live_render=args.render,
