@@ -432,7 +432,7 @@ def main():
         model_config_path=args.model_config_path,
         state_dim=args.state_dim,
         chunk_size=args.chunk_size,
-        dtype=torch.float32,
+        # dtype=torch.float32,
     )
     policy = DexoraPolicy(model_path=args.model_path, cfg=cfg)
 
