@@ -100,14 +100,6 @@ CAMERA_KEY_MAP = {
 # 其中好几个 11 维关节共享同一个 6 维源（耦合/mimic 关节）。
 HAND_INDICES = np.array([0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5])
 
-# state 是反过来的：从 obs 里 11 维实际 qpos 近似还原成 6 维。
-# 对每个 6 维 slot，取它在 HAND_INDICES 里第一次出现的位置，用那一维原始 qpos 代表整组耦合关节
-# （因为是 mimic 关节，同一 slot 对应的几个 11 维值理论上应该接近，取第一个即可，是近似值不是精确逆映射）。
-_HAND_SLOT_TO_RAW_IDX = [int(np.where(HAND_INDICES == slot)[0][0]) for slot in range(6)]
-RIGHT_HAND_SLOT_INDICES = _HAND_SLOT_TO_RAW_IDX
-LEFT_HAND_SLOT_INDICES = _HAND_SLOT_TO_RAW_IDX
-
-
 # 与 fourier_hands.py 的 indices = [0,0,1,1,2,2,3,3,4,4,5] 对应的分组
 HAND_MIMIC_GROUPS = [
     [0, 1],   # slot 0
@@ -306,8 +298,10 @@ def build_state(obs):
     left_pos = np.asarray(obs["robot0_left_eef_pos"]).reshape(-1)
     left_aa = quat2axisangle(np.asarray(obs["robot0_left_eef_quat"]).reshape(-1))
 
-    right_hand6 = hand_qpos_to_6dim(obs["robot0_right_gripper_qpos"], RIGHT_HAND_SLOT_INDICES)
-    left_hand6 = hand_qpos_to_6dim(obs["robot0_left_gripper_qpos"], LEFT_HAND_SLOT_INDICES)
+    # 必须按 mimic group 取均值。训练转换脚本也是这样从 11-D qpos 构造 6-D
+    # state；不能只取每组第一个关节，否则训练 / 推理的 proprioception 不一致。
+    right_hand6 = hand_qpos_to_6dim(obs["robot0_right_gripper_qpos"])
+    left_hand6 = hand_qpos_to_6dim(obs["robot0_left_gripper_qpos"])
 
     state = np.concatenate(
         [right_pos, right_aa, left_pos, left_aa, right_hand6, left_hand6], axis=0
