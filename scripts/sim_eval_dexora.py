@@ -31,7 +31,7 @@ sim_eval_dexora.py
 
 export DEXORA_LEROBOT_ROOT=/home/ubuntu/myh/expirement/Dexora/lerobot_data/two_arm_can_sort_random
 export DEXORA_STATS=/home/ubuntu/myh/expirement/Dexora/lerobot_data/new_lerobot_stats/dataset_statistics.json
-export DEXORA_T5=/home/ubuntu/myh/expirement/Dexora/google/t5-v1_1-small
+export DEXORA_T5=/home/ubuntu/myh/expirement/Dexora/google/t5-v1_1-base
 export DEXORA_SIGLIP=/home/ubuntu/myh/expirement/Dexora/google/siglip-so400m-patch14-384
 
 python sim_eval_dexora.py --env TwoArmCanSortRandom --dataset_hdf5 /home/ubuntu/myh/expirement/dexmimicgen/datasets/two_arm_can_sort_random.hdf5 --model_path /home/ubuntu/myh/expirement/Dexora/checkpoints/dexora-400m-pretrain/     --model_config_path /home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml     --stats_file /home/ubuntu/myh/expirement/Dexora/lerobot_data/new_lerobot_stats/dataset_statistics.json     --camera_height 84 --camera_width 84 --instruction "Use both hands to move the blue can to its sorting bin." --render
