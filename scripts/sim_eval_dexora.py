@@ -29,14 +29,14 @@ sim_eval_dexora.py
     # 有显示器的机器上想直接看仿真窗口
     python sim_eval_dexora.py --env TwoArmCoffee --model_path ... --render
 
-export DEXORA_LEROBOT_ROOT=/home/ubuntu/myh/expirement/Dexora/lerobot_data/two_arm_can_sort_random
-export DEXORA_STATS=/home/ubuntu/myh/expirement/Dexora/lerobot_data/new_lerobot_stats/dataset_statistics.json
-export DEXORA_T5=/home/ubuntu/myh/expirement/Dexora/google/t5-v1_1-large
-export DEXORA_SIGLIP=/home/ubuntu/myh/expirement/Dexora/google/siglip-so400m-patch14-384
+export DEXORA_LEROBOT_ROOT=/home/ubuntu/myh/experiment/Dexora/lerobot_data/two_arm_can_sort_random
+export DEXORA_STATS=/home/ubuntu/myh/experiment/Dexora/lerobot_data/new_lerobot_stats/dataset_statistics.json
+export DEXORA_T5=/home/ubuntu/myh/experiment/Dexora/google/t5-v1_1-small
+export DEXORA_SIGLIP=/home/ubuntu/myh/experiment/Dexora/google/siglip-so400m-patch14-384
 
-python sim_eval_dexora.py --env TwoArmCanSortRandom --dataset_hdf5 /home/ubuntu/myh/expirement/dexmimicgen/datasets/two_arm_can_sort_random.hdf5 --model_path /home/ubuntu/myh/expirement/Dexora/checkpoints/dexora-400m-pretrain/     --model_config_path /home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml     --stats_file /home/ubuntu/myh/expirement/Dexora/lerobot_data/new_lerobot_stats/dataset_statistics.json     --camera_height 84 --camera_width 84 --instruction "Use both hands to move the blue can to its sorting bin." --render
+python sim_eval_dexora.py --env TwoArmCanSortRandom --dataset_hdf5 /home/ubuntu/myh/experiment/dexmimicgen/datasets/two_arm_can_sort_random.hdf5 --model_path /home/ubuntu/myh/experiment/Dexora/checkpoints/dexora-400m-pretrain/     --model_config_path /home/ubuntu/myh/experiment/Dexora/configs/base_400m.yaml     --stats_file /home/ubuntu/myh/experiment/Dexora/lerobot_data/new_lerobot_stats/dataset_statistics.json     --camera_height 84 --camera_width 84 --instruction "Use both hands to move the blue can to its sorting bin." --render
 
-python sim_eval_dexora.py --env TwoArmCanSortRandom --dataset_hdf5 /home/ubuntu/myh/expirement/dexmimicgen/datasets/two_arm_can_sort_random.hdf5 --model_path /home/ubuntu/myh/expirement/Dexora/checkpoints/dexora-400m-posttrain/     --model_config_path /home/ubuntu/myh/expirement/Dexora/configs/base_400m.yaml     --stats_file /home/ubuntu/myh/expirement/Dexora/lerobot_data/new_lerobot_stats/dataset_statistics.json     --camera_height 84 --camera_width 84 --instruction "Use both hands to move the blue can to its sorting bin." --render
+python sim_eval_dexora.py --env TwoArmCanSortRandom --dataset_hdf5 /home/ubuntu/myh/experiment/dexmimicgen/datasets/two_arm_can_sort_random.hdf5 --model_path /home/ubuntu/myh/experiment/Dexora/checkpoints/dexora-400m-posttrain/     --model_config_path /home/ubuntu/myh/experiment/Dexora/configs/base_400m.yaml     --stats_file /home/ubuntu/myh/experiment/Dexora/lerobot_data/new_lerobot_stats/dataset_statistics.json     --camera_height 84 --camera_width 84 --instruction "Use both hands to move the blue can to its sorting bin." --render
 
     依赖：robosuite, dexmimicgen, imageio, numpy, 以及你自己的 dexora_policy.py（需要在 PYTHONPATH 里能 import 到）。
 """
@@ -58,7 +58,7 @@ from robosuite.utils.transform_utils import quat2axisangle
 import dexmimicgen  # noqa: F401  必须 import 才能把自定义环境注册到 robosuite 里
 
 import sys
-sys.path.append('/home/ubuntu/myh/expirement')
+sys.path.append('/home/ubuntu/myh/experiment')
 from Dexora.deploy.dexora_policy import DexoraPolicy, DexoraPolicyConfig  # noqa: E402
 
 
